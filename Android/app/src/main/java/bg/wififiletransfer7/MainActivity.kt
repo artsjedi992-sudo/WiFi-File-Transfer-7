@@ -141,23 +141,54 @@ class MainActivity : Activity() {
             if (session.method != Method.POST || session.uri != "/upload")
                 return newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "Not found")
 
-            val temp = HashMap<String, String>()
             return try {
-                session.parseBody(temp)
+                // NanoHTTPD 2.3.1 обработва суров POST по особен начин:
+                // parseBody() може да постави самите байтове в "postData",
+                // а не път към временен файл. Затова четем директно потока
+                // и точно Content-Length байта, без да буферираме целия файл в RAM.
+                val contentLength = session.headers["content-length"]?.toLongOrNull()
+                    ?: return newFixedLengthResponse(Response.Status.LENGTH_REQUIRED, "text/plain", "Missing Content-Length")
+                if (contentLength < 0L) {
+                    return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Invalid Content-Length")
+                }
+
                 val rawName = session.headers["x-file-name"] ?: "received_file.bin"
                 val decoded = try { java.net.URLDecoder.decode(rawName, "UTF-8") } catch (_: Exception) { rawName }
-                val safeName = File(decoded).name.replace(Regex("[\\\\/:*?\"<>|]"), "_").ifBlank { "received_file.bin" }
-                val target = File(folder, safeName)
-                val uploadPath = temp["postData"]
-                if (uploadPath != null) {
-                    // NanoHTTPD записва тялото във временен файл; копираме го в папката за получени файлове.
-                    File(uploadPath).copyTo(target, overwrite = false)
-                } else {
-                    return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing file")
+                val safeName = File(decoded).name
+                    .replace(Regex("[\\\\/:*?\"<>|]"), "_")
+                    .ifBlank { "received_file.bin" }
+
+                if (!folder.exists() && !folder.mkdirs()) {
+                    throw IOException("Не може да се създаде папката: ${folder.absolutePath}")
                 }
+
+                // При повторно изпращане добавяме номер, вместо да презаписваме файл.
+                val base = safeName.substringBeforeLast('.', safeName)
+                val ext = if (safeName.contains('.')) "." + safeName.substringAfterLast('.') else ""
+                var target = File(folder, safeName)
+                var index = 1
+                while (target.exists()) {
+                    target = File(folder, "$base ($index)$ext")
+                    index++
+                }
+
+                session.inputStream.use { input ->
+                    java.io.FileOutputStream(target).use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        var remaining = contentLength
+                        while (remaining > 0L) {
+                            val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                            if (count < 0) throw IOException("Връзката прекъсна. Остават ${remaining} байта.")
+                            output.write(buffer, 0, count)
+                            remaining -= count
+                        }
+                        output.flush()
+                    }
+                }
+
                 newFixedLengthResponse(Response.Status.OK, "text/plain", "OK")
             } catch (e: Exception) {
-                newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "Upload failed: ${e.message}")
+                newFixedLengthResponse(Response.Status.INTERNAL_ERROR, "text/plain", "Upload failed: ${e.javaClass.simpleName}: ${e.message}")
             }
         }
     }
