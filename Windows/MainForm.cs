@@ -1,7 +1,6 @@
 using System;
 using System.IO;
 using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -89,8 +88,7 @@ namespace WifiFileTransfer7
                 { context.Response.StatusCode = 404; context.Response.Close(); return; }
                 var name = Path.GetFileName(Uri.UnescapeDataString(context.Request.Headers["X-File-Name"] ?? "received_file.bin"));
                 if (String.IsNullOrWhiteSpace(name)) name = "received_file.bin";
-                var target = Path.Combine(_folder.Text, name);
-                if (File.Exists(target)) target = Path.Combine(_folder.Text, Path.GetFileNameWithoutExtension(name) + "_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + Path.GetExtension(name));
+                var target = UniquePath(_folder.Text, name);
                 using (var output = new FileStream(target, FileMode.CreateNew, FileAccess.Write))
                     context.Request.InputStream.CopyTo(output);
                 var bytes = Encoding.UTF8.GetBytes("OK");
@@ -104,6 +102,17 @@ namespace WifiFileTransfer7
             }
         }
 
+        private static string UniquePath(string folder, string name)
+        {
+            var path = Path.Combine(folder, name);
+            if (!File.Exists(path)) return path;
+            var baseName = Path.GetFileNameWithoutExtension(name);
+            var ext = Path.GetExtension(name);
+            int index = 1;
+            do { path = Path.Combine(folder, baseName + " (" + index++ + ")" + ext); } while (File.Exists(path));
+            return path;
+        }
+
         private async Task SendFile()
         {
             using (var d = new OpenFileDialog())
@@ -112,12 +121,31 @@ namespace WifiFileTransfer7
                 try
                 {
                     _send.Enabled = false; _progress.Value = 0; _status.Text = "Изпращане…";
-                    using (var client = new WebClient())
+                    var info = new FileInfo(d.FileName);
+                    var request = (HttpWebRequest)WebRequest.Create("http://" + _phoneIp.Text.Trim() + ":8766/upload");
+                    request.Method = "POST";
+                    request.ContentType = "application/octet-stream";
+                    request.ContentLength = info.Length;
+                    request.Timeout = 60000;
+                    request.ReadWriteTimeout = 60000;
+                    request.Headers["X-File-Name"] = Uri.EscapeDataString(info.Name);
+                    using (var input = File.OpenRead(d.FileName))
+                    using (var output = await request.GetRequestStreamAsync())
                     {
-                        client.Headers[HttpRequestHeader.ContentType] = "application/octet-stream";
-                        client.Headers["X-File-Name"] = Uri.EscapeDataString(Path.GetFileName(d.FileName));
-                        client.UploadProgressChanged += (s, e) => { if (!IsDisposed) BeginInvoke((Action)(() => _progress.Value = Math.Max(0, Math.Min(100, e.ProgressPercentage)))); };
-                        await client.UploadFileTaskAsync(new Uri("http://" + _phoneIp.Text.Trim() + ":8766/upload"), "POST", d.FileName);
+                        var buffer = new byte[64 * 1024];
+                        int read;
+                        long sent = 0;
+                        while ((read = await input.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                        {
+                            await output.WriteAsync(buffer, 0, read);
+                            sent += read;
+                            var percent = info.Length == 0 ? 100 : (int)(sent * 100 / info.Length);
+                            if (!IsDisposed) BeginInvoke((Action)(() => _progress.Value = Math.Max(0, Math.Min(100, percent))));
+                        }
+                    }
+                    using (var response = (HttpWebResponse)await request.GetResponseAsync())
+                    {
+                        if (response.StatusCode != HttpStatusCode.OK) throw new Exception("Телефонът върна HTTP " + (int)response.StatusCode);
                     }
                     _status.Text = "Файлът е изпратен успешно.";
                 }
