@@ -7,6 +7,7 @@ import android.net.Uri
 import android.widget.*
 import fi.iki.elonen.NanoHTTPD
 import java.io.File
+import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
@@ -147,7 +148,7 @@ class MainActivity : Activity() {
                 // а не път към временен файл. Затова четем директно потока
                 // и точно Content-Length байта, без да буферираме целия файл в RAM.
                 val contentLength = session.headers["content-length"]?.toLongOrNull()
-                    ?: return newFixedLengthResponse(Response.Status.LENGTH_REQUIRED, "text/plain", "Missing Content-Length")
+                    ?: return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Missing Content-Length")
                 if (contentLength < 0L) {
                     return newFixedLengthResponse(Response.Status.BAD_REQUEST, "text/plain", "Invalid Content-Length")
                 }
@@ -172,18 +173,18 @@ class MainActivity : Activity() {
                     index++
                 }
 
-                session.inputStream.use { input ->
-                    java.io.FileOutputStream(target).use { output ->
-                        val buffer = ByteArray(64 * 1024)
-                        var remaining = contentLength
-                        while (remaining > 0L) {
-                            val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
-                            if (count < 0) throw IOException("Връзката прекъсна. Остават ${remaining} байта.")
-                            output.write(buffer, 0, count)
-                            remaining -= count
-                        }
-                        output.flush()
+                // Не затваряме session.inputStream: NanoHTTPD трябва да изпрати HTTP отговора.
+                val input = session.inputStream
+                java.io.FileOutputStream(target).use { output ->
+                    val buffer = ByteArray(64 * 1024)
+                    var remaining = contentLength
+                    while (remaining > 0L) {
+                        val count = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                        if (count < 0) throw IOException("Връзката прекъсна. Остават ${remaining} байта.")
+                        output.write(buffer, 0, count)
+                        remaining -= count
                     }
+                    output.flush()
                 }
 
                 newFixedLengthResponse(Response.Status.OK, "text/plain", "OK")
