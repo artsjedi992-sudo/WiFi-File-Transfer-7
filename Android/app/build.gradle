@@ -2,9 +2,11 @@ plugins {
     id 'com.android.application'
     id 'org.jetbrains.kotlin.android'
 }
+
 android {
     namespace 'bg.wififiletransfer7'
     compileSdk 35
+
     defaultConfig {
         applicationId 'bg.wififiletransfer7'
         minSdk 29
@@ -12,7 +14,19 @@ android {
         versionCode 1
         versionName '0.1.0'
     }
+
+    // Уеднаквяваме Java и Kotlin към JVM 17, за да няма
+    // несъвместимост между compileDebugJavaWithJavac и compileDebugKotlin.
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    kotlinOptions {
+        jvmTarget = '17'
+    }
 }
+
 dependencies {
     implementation 'org.nanohttpd:nanohttpd:2.3.1'
 }
