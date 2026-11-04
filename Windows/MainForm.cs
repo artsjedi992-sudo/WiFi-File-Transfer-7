@@ -149,6 +149,27 @@ namespace WifiFileTransfer7
                     }
                     _status.Text = "Файлът е изпратен успешно.";
                 }
+                catch (WebException ex)
+                {
+                    var detail = ex.Message;
+                    try
+                    {
+                        using (var response = ex.Response as HttpWebResponse)
+                        using (var stream = response == null ? null : response.GetResponseStream())
+                        using (var reader = stream == null ? null : new StreamReader(stream, Encoding.UTF8))
+                        {
+                            if (response != null)
+                                detail = "HTTP " + (int)response.StatusCode + " " + response.StatusDescription;
+                            if (reader != null)
+                            {
+                                var serverMessage = reader.ReadToEnd();
+                                if (!String.IsNullOrWhiteSpace(serverMessage)) detail += ": " + serverMessage;
+                            }
+                        }
+                    }
+                    catch { }
+                    _status.Text = "Неуспешно изпращане: " + detail;
+                }
                 catch (Exception ex) { _status.Text = "Неуспешно изпращане: " + ex.Message; }
                 finally { _send.Enabled = true; }
             }
